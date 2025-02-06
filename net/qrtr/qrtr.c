@@ -588,7 +588,12 @@ static int qrtr_node_enqueue(struct qrtr_node *node, struct sk_buff *skb,
 	hdr->src_port_id = cpu_to_le32(from->sq_port);
 	if (to->sq_node == QRTR_NODE_BCAST)
 		hdr->dst_node_id = cpu_to_le32(node->nid);
+<<<<<<< HEAD
 	else
+=======
+		hdr->dst_port_id = cpu_to_le32(QRTR_PORT_CTRL);
+	} else {
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 		hdr->dst_node_id = cpu_to_le32(to->sq_node);
 
 	hdr->dst_port_id = cpu_to_le32(to->sq_port);
@@ -800,14 +805,19 @@ int qrtr_endpoint_post(struct qrtr_endpoint *ep, const void *data, size_t len)
 	const struct qrtr_hdr_v2 *v2;
 	struct sk_buff *skb;
 	struct qrtr_cb *cb;
+<<<<<<< HEAD
 	unsigned int size;
 	int errcode;
+=======
+	size_t size;
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 	unsigned int ver;
 	size_t hdrlen;
 
 	if (len == 0 || len & 3)
 		return -EINVAL;
 
+<<<<<<< HEAD
 	skb = alloc_skb_with_frags(sizeof(*v1), len, 0, &errcode, GFP_ATOMIC);
 	if (!skb) {
 		skb = qrtr_get_backup(len);
@@ -816,6 +826,11 @@ int qrtr_endpoint_post(struct qrtr_endpoint *ep, const void *data, size_t len)
 			return -ENOMEM;
 		}
 	}
+=======
+	skb = __netdev_alloc_skb(NULL, len, GFP_ATOMIC | __GFP_NOWARN);
+	if (!skb)
+		return -ENOMEM;
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 
 	skb_reserve(skb, sizeof(*v1));
 	cb = (struct qrtr_cb *)skb->cb;
@@ -864,10 +879,14 @@ int qrtr_endpoint_post(struct qrtr_endpoint *ep, const void *data, size_t len)
 		goto err;
 	}
 
+<<<<<<< HEAD
 	if (cb->dst_port == QRTR_PORT_CTRL_LEGACY)
 		cb->dst_port = QRTR_PORT_CTRL;
 
 	if (len != ALIGN(size, 4) + hdrlen)
+=======
+	if (!size || len != ALIGN(size, 4) + hdrlen)
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 		goto err;
 
 	if (cb->dst_port != QRTR_PORT_CTRL && cb->type != QRTR_TYPE_DATA &&
@@ -1551,11 +1570,17 @@ static int qrtr_bcast_enqueue(struct qrtr_node *node, struct sk_buff *skb,
 {
 	struct sk_buff *skbn;
 
+<<<<<<< HEAD
 	down_read(&qrtr_node_lock);
 	list_for_each_entry(node, &qrtr_all_epts, item) {
 		if (node->nid == QRTR_EP_NID_AUTO && type != QRTR_TYPE_HELLO)
 			continue;
 		skbn = skb_clone(skb, GFP_KERNEL);
+=======
+	mutex_lock(&qrtr_node_lock);
+	list_for_each_entry(node, &qrtr_all_nodes, item) {
+		skbn = pskb_copy(skb, GFP_KERNEL);
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 		if (!skbn)
 			break;
 		skb_set_owner_w(skbn, skb->sk);
@@ -1643,8 +1668,10 @@ static int qrtr_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
 	plen = (len + 3) & ~3;
 	skb = sock_alloc_send_skb(sk, plen + QRTR_HDR_MAX_SIZE,
 				  msg->msg_flags & MSG_DONTWAIT, &rc);
-	if (!skb)
+	if (!skb) {
+		rc = -ENOMEM;
 		goto out_node;
+	}
 
 	skb_reserve(skb, QRTR_HDR_MAX_SIZE);
 
@@ -1758,11 +1785,20 @@ static int qrtr_recvmsg(struct socket *sock, struct msghdr *msg,
 	rc = copied;
 
 	if (addr) {
+<<<<<<< HEAD
         /* There is an anonymous 2-byte hole after sq_family,
          * make sure to clear it.
          */
         memset(addr, 0, sizeof(*addr));
 
+=======
+		/* There is an anonymous 2-byte hole after sq_family,
+		 * make sure to clear it.
+		 */
+		memset(addr, 0, sizeof(*addr));
+
+		cb = (struct qrtr_cb *)skb->cb;
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 		addr->sq_family = AF_QIPCRTR;
 		addr->sq_node = cb->src_node;
 		addr->sq_port = cb->src_port;

@@ -137,7 +137,7 @@ static int dbgp_enable_ep_req(struct usb_ep *ep)
 		goto fail_1;
 	}
 
-	req->buf = kmalloc(DBGP_REQ_LEN, GFP_KERNEL);
+	req->buf = kzalloc(DBGP_REQ_LEN, GFP_KERNEL);
 	if (!req->buf) {
 		err = -ENOMEM;
 		stp = 2;
@@ -346,14 +346,23 @@ static int dbgp_setup(struct usb_gadget *gadget,
 	u16 len = 0;
 
 	if (length > DBGP_REQ_LEN) {
+<<<<<<< HEAD
 		if (ctrl->bRequestType == USB_DIR_OUT) {
 			return err;
 		} else {
+=======
+		if (ctrl->bRequestType & USB_DIR_IN) {
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 			/* Cast away the const, we are going to overwrite on purpose. */
 			__le16 *temp = (__le16 *)&ctrl->wLength;
 
 			*temp = cpu_to_le16(DBGP_REQ_LEN);
 			length = DBGP_REQ_LEN;
+<<<<<<< HEAD
+=======
+		} else {
+			return err;
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 		}
 	}
 

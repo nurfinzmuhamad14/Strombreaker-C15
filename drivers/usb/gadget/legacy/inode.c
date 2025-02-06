@@ -361,6 +361,7 @@ ep_io (struct ep_data *epdata, void *buf, unsigned len)
 				spin_unlock_irq (&epdata->dev->lock);
 
 				DBG (epdata->dev, "endpoint gone\n");
+				wait_for_completion(&done);
 				epdata->status = -ENODEV;
 			}
 		}
@@ -1335,14 +1336,23 @@ gadgetfs_setup (struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 	u16				w_length = le16_to_cpu(ctrl->wLength);
 
 	if (w_length > RBUF_SIZE) {
+<<<<<<< HEAD
 		if (ctrl->bRequestType == USB_DIR_OUT) {
 			return value;
 		} else {
+=======
+		if (ctrl->bRequestType & USB_DIR_IN) {
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 			/* Cast away the const, we are going to overwrite on purpose. */
 			__le16 *temp = (__le16 *)&ctrl->wLength;
 
 			*temp = cpu_to_le16(RBUF_SIZE);
 			w_length = RBUF_SIZE;
+<<<<<<< HEAD
+=======
+		} else {
+			return value;
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 		}
 	}
 
@@ -2057,6 +2067,9 @@ gadgetfs_fill_super (struct super_block *sb, void *opts, int silent)
 	return 0;
 
 Enomem:
+	kfree(CHIP);
+	CHIP = NULL;
+
 	return -ENOMEM;
 }
 

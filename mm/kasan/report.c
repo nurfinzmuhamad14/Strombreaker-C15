@@ -91,6 +91,7 @@ static void end_report(unsigned long *flags)
 	pr_err("==================================================================\n");
 	add_taint(TAINT_BAD_PAGE, LOCKDEP_NOW_UNRELIABLE);
 	spin_unlock_irqrestore(&report_lock, *flags);
+<<<<<<< HEAD
 #ifdef OPLUS_BUG_STABILITY
 	//BSP.Kernel.Stability, kasan load enforce BUG
         panic("panic_on_warn set ...\n");
@@ -98,6 +99,9 @@ static void end_report(unsigned long *flags)
 	if (panic_on_warn)
 		panic("panic_on_warn set ...\n");
 #endif /*OPLUS_BUG_STABILITY*/
+=======
+	check_panic_on_warn("KASAN");
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 	kasan_enable_current();
 }
 

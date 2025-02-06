@@ -290,9 +290,13 @@ obj-$(CONFIG_GENERIC_LIB_MULDI3) += muldi3.o
 obj-$(CONFIG_GENERIC_LIB_CMPDI2) += cmpdi2.o
 obj-$(CONFIG_GENERIC_LIB_UCMPDI2) += ucmpdi2.o
 
+<<<<<<< HEAD
 # ifdef CONFIG_VMALLOC_DEBUG
 # /* add memleak detect stack depot */
 obj-$(CONFIG_VMALLOC_DEBUG) += memleak_debug_stackdepot.o
 KASAN_SANITIZE_memleak_debug_stackdepot.o := n
 KCOV_INSTRUMENT_memleak_debug_stackdepot.o := n
 # endif
+=======
+obj-y += crypto/
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191

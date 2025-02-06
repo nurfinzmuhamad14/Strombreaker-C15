@@ -32,12 +32,16 @@ void nf_register_queue_handler(struct net *net, const struct nf_queue_handler *q
 void nf_unregister_queue_handler(struct net *net);
 void nf_reinject(struct nf_queue_entry *entry, unsigned int verdict);
 
+<<<<<<< HEAD
 #ifdef OPLUS_FEATURE_WIFI_LIMMITBGSPEED
 void nf_register_queue_imq_handler(const struct nf_queue_handler *qh);
 void nf_unregister_queue_imq_handler(void);
 #endif /* OPLUS_FEATURE_WIFI_LIMMITBGSPEED */
 
 void nf_queue_entry_get_refs(struct nf_queue_entry *entry);
+=======
+bool nf_queue_entry_get_refs(struct nf_queue_entry *entry);
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 void nf_queue_entry_release_refs(struct nf_queue_entry *entry);
 
 static inline void init_hashrandom(u32 *jhash_initval)

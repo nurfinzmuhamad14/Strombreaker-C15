@@ -23,8 +23,11 @@ struct netns_nf {
 	struct nf_hook_entries __rcu *hooks_arp[NF_ARP_NUMHOOKS];
 #endif
 	struct nf_hook_entries __rcu *hooks_bridge[NF_INET_NUMHOOKS];
+<<<<<<< HEAD
 #if IS_ENABLED(CONFIG_DECNET)
 	struct nf_hook_entries __rcu *hooks_decnet[NF_DN_NUMHOOKS];
+=======
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 #endif
 #if IS_ENABLED(CONFIG_NF_DEFRAG_IPV4)
 	bool			defrag_ipv4;

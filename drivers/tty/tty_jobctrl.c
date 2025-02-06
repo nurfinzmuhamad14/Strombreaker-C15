@@ -104,7 +104,11 @@ static void __proc_set_tty(struct tty_struct *tty)
 	put_pid(tty->pgrp);
 	tty->pgrp = get_pid(task_pgrp(current));
 	tty->session = get_pid(task_session(current));
+<<<<<<< HEAD
     spin_unlock_irqrestore(&tty->ctrl_lock, flags);
+=======
+	spin_unlock_irqrestore(&tty->ctrl_lock, flags);
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 	if (current->signal->tty) {
 		tty_debug(tty, "current tty %s not NULL!!\n",
 			  current->signal->tty->name);
@@ -290,6 +294,7 @@ void disassociate_ctty(int on_exit)
 		return;
 	}
 
+<<<<<<< HEAD
 	spin_lock_irq(&current->sighand->siglock);
 	put_pid(current->signal->tty_old_pgrp);
 	current->signal->tty_old_pgrp = NULL;
@@ -301,16 +306,40 @@ void disassociate_ctty(int on_exit)
 		unsigned long flags;
 
         tty_lock(tty);
+=======
+	tty = get_current_tty();
+	if (tty) {
+		unsigned long flags;
+
+		tty_lock(tty);
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 		spin_lock_irqsave(&tty->ctrl_lock, flags);
 		put_pid(tty->session);
 		put_pid(tty->pgrp);
 		tty->session = NULL;
 		tty->pgrp = NULL;
 		spin_unlock_irqrestore(&tty->ctrl_lock, flags);
+<<<<<<< HEAD
         tty_unlock(tty);
 		tty_kref_put(tty);
 	}
 
+=======
+		tty_unlock(tty);
+		tty_kref_put(tty);
+	}
+
+	/* If tty->ctrl.pgrp is not NULL, it may be assigned to
+	 * current->signal->tty_old_pgrp in a race condition, and
+	 * cause pid memleak. Release current->signal->tty_old_pgrp
+	 * after tty->ctrl.pgrp set to NULL.
+	 */
+	spin_lock_irq(&current->sighand->siglock);
+	put_pid(current->signal->tty_old_pgrp);
+	current->signal->tty_old_pgrp = NULL;
+	spin_unlock_irq(&current->sighand->siglock);
+
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 	/* Now clear signal->tty under the lock */
 	read_lock(&tasklist_lock);
 	session_clear_tty(task_session(current));
@@ -481,11 +510,16 @@ static int tiocspgrp(struct tty_struct *tty, struct tty_struct *real_tty, pid_t 
 		return -ENOTTY;
 	if (retval)
 		return retval;
+<<<<<<< HEAD
+=======
+
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 	if (get_user(pgrp_nr, p))
 		return -EFAULT;
 	if (pgrp_nr < 0)
 		return -EINVAL;
 
+<<<<<<< HEAD
     spin_lock_irq(&real_tty->ctrl_lock);
     if (!current->signal->tty ||
         (current->signal->tty != real_tty) ||
@@ -493,6 +527,15 @@ static int tiocspgrp(struct tty_struct *tty, struct tty_struct *real_tty, pid_t 
             retval = -ENOTTY;
             goto out_unlock_ctrl;
     }
+=======
+	spin_lock_irq(&real_tty->ctrl_lock);
+	if (!current->signal->tty ||
+	    (current->signal->tty != real_tty) ||
+	    (real_tty->session != task_session(current))) {
+		retval = -ENOTTY;
+		goto out_unlock_ctrl;
+	}
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 	rcu_read_lock();
 	pgrp = find_vpid(pgrp_nr);
 	retval = -ESRCH;
@@ -507,7 +550,11 @@ static int tiocspgrp(struct tty_struct *tty, struct tty_struct *real_tty, pid_t 
 out_unlock:
 	rcu_read_unlock();
 out_unlock_ctrl:
+<<<<<<< HEAD
     spin_unlock_irq(&real_tty->ctrl_lock);
+=======
+	spin_unlock_irq(&real_tty->ctrl_lock);
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 	return retval;
 }
 
@@ -522,8 +569,13 @@ out_unlock_ctrl:
  */
 static int tiocgsid(struct tty_struct *tty, struct tty_struct *real_tty, pid_t __user *p)
 {
+<<<<<<< HEAD
     unsigned long flags;
     pid_t sid;
+=======
+	unsigned long flags;
+	pid_t sid;
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 
 	/*
 	 * (tty == real_tty) is a cheap way of
@@ -532,6 +584,7 @@ static int tiocgsid(struct tty_struct *tty, struct tty_struct *real_tty, pid_t _
 	if (tty == real_tty && current->signal->tty != real_tty)
 		return -ENOTTY;
 
+<<<<<<< HEAD
     spin_lock_irqsave(&real_tty->ctrl_lock, flags);
 	if (!real_tty->session)
         goto err;
@@ -543,6 +596,19 @@ static int tiocgsid(struct tty_struct *tty, struct tty_struct *real_tty, pid_t _
 err:
     spin_unlock_irqrestore(&real_tty->ctrl_lock, flags);
     return -ENOTTY;
+=======
+	spin_lock_irqsave(&real_tty->ctrl_lock, flags);
+	if (!real_tty->session)
+		goto err;
+	sid = pid_vnr(real_tty->session);
+	spin_unlock_irqrestore(&real_tty->ctrl_lock, flags);
+
+	return put_user(sid, p);
+
+err:
+	spin_unlock_irqrestore(&real_tty->ctrl_lock, flags);
+	return -ENOTTY;
+>>>>>>> 4032897d243ab4fbe7b5eca36a3ecb496c752191
 }
 
 /*
