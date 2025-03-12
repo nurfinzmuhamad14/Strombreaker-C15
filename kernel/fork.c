@@ -107,6 +107,15 @@
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/task.h>
+#ifdef OPLUS_FEATURE_UIFIRST
+#include <linux/uifirst/uifirst_sched_fork.h>
+#endif /* OPLUS_FEATURE_UIFIRST */
+
+#ifdef OPLUS_FEATURE_HEALTHINFO
+#ifdef CONFIG_OPPO_JANK_INFO
+#include <linux/oppo_healthinfo/oppo_jank_monitor.h>
+#endif
+#endif /* OPLUS_FEATURE_HEALTHINFO */
 
 /*
  * Minimum number of threads to boot the kernel
@@ -334,7 +343,7 @@ struct vm_area_struct *vm_area_dup(struct vm_area_struct *orig)
 
 	if (new) {
 		*new = *orig;
-		INIT_LIST_HEAD(&new->anon_vma_chain);
+		INIT_VMA(new);
 	}
 	return new;
 }
@@ -433,7 +442,7 @@ EXPORT_SYMBOL(free_task);
 static __latent_entropy int dup_mmap(struct mm_struct *mm,
 					struct mm_struct *oldmm)
 {
-	struct vm_area_struct *mpnt, *tmp, *prev, **pprev;
+	struct vm_area_struct *mpnt, *tmp, *prev, **pprev, *last = NULL;
 	struct rb_node **rb_link, *rb_parent;
 	int retval;
 	unsigned long charge;
@@ -552,8 +561,18 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 		rb_parent = &tmp->vm_rb;
 
 		mm->map_count++;
-		if (!(tmp->vm_flags & VM_WIPEONFORK))
+		if (!(tmp->vm_flags & VM_WIPEONFORK)) {
+			if (IS_ENABLED(CONFIG_SPECULATIVE_PAGE_FAULT)) {
+				/*
+				 * Mark this VMA as changing to prevent the
+				 * speculative page fault hanlder to process
+				 * it until the TLB are flushed below.
+				 */
+				last = mpnt;
+				vm_write_begin(mpnt);
+			}
 			retval = copy_page_range(mm, oldmm, mpnt);
+		}
 
 		if (tmp->vm_ops && tmp->vm_ops->open)
 			tmp->vm_ops->open(tmp);
@@ -561,11 +580,28 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 		if (retval)
 			goto out;
 	}
+
 	/* a new mm has just been created */
 	retval = arch_dup_mmap(oldmm, mm);
 out:
 	up_write(&mm->mmap_sem);
 	flush_tlb_mm(oldmm);
+
+	if (IS_ENABLED(CONFIG_SPECULATIVE_PAGE_FAULT)) {
+		/*
+		 * Since the TLB has been flush, we can safely unmark the
+		 * copied VMAs and allows the speculative page fault handler to
+		 * process them again.
+		 * Walk back the VMA list from the last marked VMA.
+		 */
+		for (; last; last = last->vm_prev) {
+			if (last->vm_flags & VM_DONTCOPY)
+				continue;
+			if (!(last->vm_flags & VM_WIPEONFORK))
+				vm_write_end(last);
+		}
+	}
+
 	up_write(&oldmm->mmap_sem);
 	dup_userfaultfd_complete(&uf);
 fail_uprobe_end:
@@ -610,7 +646,13 @@ static void check_mm(struct mm_struct *mm)
 	int i;
 
 	for (i = 0; i < NR_MM_COUNTERS; i++) {
-		long x = atomic_long_read(&mm->rss_stat.count[i]);
+		long x;
+
+		/* MM_UNRECLAIMABLE could be freed later in exit_files */
+		if (i == MM_UNRECLAIMABLE)
+			continue;
+
+		x = atomic_long_read(&mm->rss_stat.count[i]);
 
 		if (unlikely(x))
 			printk(KERN_ALERT "BUG: Bad rss-counter state "
@@ -954,6 +996,14 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	mm->mmap = NULL;
 	mm->mm_rb = RB_ROOT;
 	mm->vmacache_seqnum = 0;
+#if defined(OPLUS_FEATURE_VIRTUAL_RESERVE_MEMORY) && defined(CONFIG_VIRTUAL_RESERVE_MEMORY)
+	mm->va_feature = 0;
+	mm->va_feature_rnd = 0;
+	mm->zygoteheap_in_MB = 0;
+#endif
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	rwlock_init(&mm->mm_rb_lock);
+#endif
 	atomic_set(&mm->mm_users, 1);
 	atomic_set(&mm->mm_count, 1);
 	init_rwsem(&mm->mmap_sem);
@@ -1661,7 +1711,6 @@ static __always_inline void delayed_free_task(struct task_struct *tsk)
 	else
 		free_task(tsk);
 }
-
 static int pidfd_release(struct inode *inode, struct file *file)
 {
 	struct pid *pid = file->private_data;
@@ -1739,7 +1788,6 @@ static int pidfd_create(struct pid *pid)
 
 	return fd;
 }
-
 static void copy_oom_score_adj(u64 clone_flags, struct task_struct *tsk)
 {
 	/* Skip if kernel thread */
@@ -2006,6 +2054,20 @@ static __latent_entropy struct task_struct *copy_process(
 	p->sequential_io	= 0;
 	p->sequential_io_avg	= 0;
 #endif
+
+#ifdef OPLUS_FEATURE_UIFIRST
+	init_task_ux_info(p);
+#endif /* OPLUS_FEATURE_UIFIRST */
+
+#ifdef CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT
+	p->fpack = NULL;
+#endif /* CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT */
+#ifdef OPLUS_FEATURE_HEALTHINFO
+#ifdef CONFIG_OPPO_JANK_INFO
+	p->jank_trace = 0;
+	memset(&p->oppo_jank_info, 0, sizeof(struct oppo_jank_monitor_info));
+#endif
+#endif /* OPLUS_FEATURE_HEALTHINFO */
 
 	/* Perform scheduler related setup. Assign this task to a CPU. */
 	retval = sched_fork(clone_flags, p);
@@ -2291,6 +2353,7 @@ bad_fork_cleanup_perf:
 	perf_event_free_task(p);
 bad_fork_cleanup_policy:
 	lockdep_free_task(p);
+	free_task_load_ptrs(p);
 #ifdef CONFIG_NUMA
 	mpol_put(p->mempolicy);
 bad_fork_cleanup_threadgroup_lock:
@@ -2387,6 +2450,10 @@ long _do_fork(unsigned long clone_flags,
 
 	pid = get_task_pid(p, PIDTYPE_PID);
 	nr = pid_vnr(pid);
+#if defined(OPLUS_FEATURE_MEMLEAK_DETECT) && defined(CONFIG_ION) && defined(CONFIG_DUMP_TASKS_MEM)
+	//accounts process-real-phymem
+	atomic64_set(&p->ions, 0);
+#endif
 
 	if (clone_flags & CLONE_PARENT_SETTID)
 		put_user(nr, parent_tidptr);

@@ -30,6 +30,7 @@
 #include <linux/ratelimit.h>
 #include <linux/debugfs.h>
 #include <asm/sections.h>
+#include <soc/qcom/minidump.h>
 
 #define PANIC_TIMER_STEP 100
 #define PANIC_BLINK_SPD 18
@@ -127,6 +128,10 @@ void nmi_panic(struct pt_regs *regs, const char *msg)
 }
 EXPORT_SYMBOL(nmi_panic);
 
+#ifdef CONFIG_OPLUS_FEATURE_PANIC_FLUSH
+extern int panic_flush_device_cache(int timeout);
+#endif
+
 /**
  *	panic - halt the system
  *	@fmt: The text string to print
@@ -179,6 +184,10 @@ void panic(const char *fmt, ...)
 	va_start(args, fmt);
 	vsnprintf(buf, sizeof(buf), fmt, args);
 	va_end(args);
+	dump_stack_minidump(0);
+#ifdef CONFIG_OPLUS_FEATURE_PANIC_FLUSH
+	panic_flush_device_cache(2000);
+#endif
 	if (vendor_panic_cb)
 		vendor_panic_cb(0);
 	pr_emerg("Kernel panic - not syncing: %s\n", buf);
