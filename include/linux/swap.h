@@ -14,6 +14,11 @@
 #include <linux/page-flags.h>
 #include <asm/page.h>
 
+#if defined(CONFIG_NANDSWAP)
+#include <../drivers/soc/oplus/oplus_nandswap/nandswap.h>
+#define SWAP_NANDSWAP_PRIO	2020	/* just a magic number */
+#endif
+
 struct notifier_block;
 
 struct bio;
@@ -173,11 +178,17 @@ enum {
 	SWP_STABLE_WRITES = (1 << 10),	/* no overwrite PG_writeback pages */
 	SWP_SYNCHRONOUS_IO = (1 << 11),	/* synchronous IO is efficient */
 					/* add others here before... */
+#if defined(CONFIG_NANDSWAP)
+	SWP_NANDSWAP	= (1 << 12),	/* mark the device used for nandswap */
+	SWP_SCANNING	= (1 << 13),	/* refcount in scan_swap_map */
+#else
 	SWP_SCANNING	= (1 << 12),	/* refcount in scan_swap_map */
+#endif
 };
 
 #define SWAP_CLUSTER_MAX 32UL
 #define COMPACT_CLUSTER_MAX SWAP_CLUSTER_MAX
+#define SWAPFILE_CLUSTER	256
 
 #define SWAP_MAP_MAX	0x3e	/* Max duplication count, in first swap_map */
 #define SWAP_MAP_BAD	0x3f	/* Note pageblock is bad, in first swap_map */
@@ -348,8 +359,14 @@ extern void deactivate_file_page(struct page *page);
 extern void mark_page_lazyfree(struct page *page);
 extern void swap_setup(void);
 
-extern void lru_cache_add_active_or_unevictable(struct page *page,
-						struct vm_area_struct *vma);
+extern void __lru_cache_add_active_or_unevictable(struct page *page,
+						unsigned long vma_flags);
+
+static inline void lru_cache_add_active_or_unevictable(struct page *page,
+						struct vm_area_struct *vma)
+{
+	return __lru_cache_add_active_or_unevictable(page, vma->vm_flags);
+}
 
 /* linux/mm/vmscan.c */
 extern unsigned long zone_reclaimable_pages(struct zone *zone);
@@ -366,6 +383,8 @@ extern unsigned long mem_cgroup_shrink_node(struct mem_cgroup *mem,
 						unsigned long *nr_scanned);
 extern unsigned long shrink_all_memory(unsigned long nr_pages);
 extern int vm_swappiness;
+extern int sysctl_swap_ratio;
+extern int sysctl_swap_ratio_enable;
 extern int remove_mapping(struct address_space *mapping, struct page *page);
 extern unsigned long vm_total_pages;
 

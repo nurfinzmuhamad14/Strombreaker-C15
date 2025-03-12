@@ -36,6 +36,7 @@ struct fscrypt_name {
 	u32 hash;
 	u32 minor_hash;
 	struct fscrypt_str crypto_buf;
+	//bool is_ciphertext_name;
 	bool is_ciphertext_name;
 };
 
@@ -178,6 +179,8 @@ int fscrypt_ioctl_add_key(struct file *filp, void __user *arg);
 int fscrypt_ioctl_remove_key(struct file *filp, void __user *arg);
 int fscrypt_ioctl_remove_key_all_users(struct file *filp, void __user *arg);
 int fscrypt_ioctl_get_key_status(struct file *filp, void __user *arg);
+int fscrypt_register_key_removal_notifier(struct notifier_block *nb);
+int fscrypt_unregister_key_removal_notifier(struct notifier_block *nb);
 
 /* keysetup.c */
 int fscrypt_get_encryption_info(struct inode *inode);
@@ -378,6 +381,18 @@ static inline int fscrypt_ioctl_get_key_status(struct file *filp,
 					       void __user *arg)
 {
 	return -EOPNOTSUPP;
+}
+
+static inline int fscrypt_register_key_removal_notifier(
+						struct notifier_block *nb)
+{
+	return 0;
+}
+
+static inline int fscrypt_unregister_key_removal_notifier(
+						struct notifier_block *nb)
+{
+	return 0;
 }
 
 /* keysetup.c */
@@ -661,6 +676,7 @@ static inline int fscrypt_require_key(struct inode *inode)
  *
  * Return: 0 on success, -ENOKEY if the directory's encryption key is missing,
  * -EXDEV if the link would result in an inconsistent encryption policy, or
+ * -EXDEV if the link would result in an inconsistent encryption policy, or
  * another -errno code.
  */
 static inline int fscrypt_prepare_link(struct dentry *old_dentry,
@@ -668,6 +684,7 @@ static inline int fscrypt_prepare_link(struct dentry *old_dentry,
 				       struct dentry *dentry)
 {
 	if (IS_ENCRYPTED(dir))
+		return __fscrypt_prepare_link(d_inode(old_dentry), dir, dentry);
 		return __fscrypt_prepare_link(d_inode(old_dentry), dir, dentry);
 	return 0;
 }
@@ -692,6 +709,7 @@ static inline int fscrypt_prepare_link(struct dentry *old_dentry,
  * in an encrypted directory tree use the same encryption policy.
  *
  * Return: 0 on success, -ENOKEY if an encryption key is missing, -EXDEV if the
+ * Return: 0 on success, -ENOKEY if an encryption key is missing, -EXDEV if the
  * rename would cause inconsistent encryption policies, or another -errno code.
  */
 static inline int fscrypt_prepare_rename(struct inode *old_dir,
@@ -712,7 +730,11 @@ static inline int fscrypt_prepare_rename(struct inode *old_dir,
  * @dir: directory being searched
  * @dentry: filename being looked up
  * @fname: (output) the name to use to search the on-disk directory
+ * @fname: (output) the name to use to search the on-disk directory
  *
+ * Prepare for ->lookup() in a directory which may be encrypted by determining
+ * the name that will actually be used to search the directory on-disk.  Lookups
+ * can be done with or without the directory's encryption key; without the key,
  * Prepare for ->lookup() in a directory which may be encrypted by determining
  * the name that will actually be used to search the directory on-disk.  Lookups
  * can be done with or without the directory's encryption key; without the key,
@@ -723,6 +745,9 @@ static inline int fscrypt_prepare_rename(struct inode *old_dir,
  * operations contain fscrypt_d_revalidate if DCACHE_ENCRYPTED_NAME was set,
  * so that the dentry can be invalidated if the key is later added.
  *
+ * Return: 0 on success; -ENOENT if key is unavailable but the filename isn't a
+ * correctly formed encoded ciphertext name, so a negative dentry should be
+ * created; or another -errno code.
  * Return: 0 on success; -ENOENT if key is unavailable but the filename isn't a
  * correctly formed encoded ciphertext name, so a negative dentry should be
  * created; or another -errno code.
@@ -738,7 +763,7 @@ static inline int fscrypt_prepare_lookup(struct inode *dir,
 	fname->usr_fname = &dentry->d_name;
 	fname->disk_name.name = (unsigned char *)dentry->d_name.name;
 	fname->disk_name.len = dentry->d_name.len;
-	return 0;
+        return 0;
 }
 
 /**
@@ -841,5 +866,4 @@ static inline void fscrypt_finalize_bounce_page(struct page **pagep)
 		fscrypt_free_bounce_page(page);
 	}
 }
-
 #endif	/* _LINUX_FSCRYPT_H */

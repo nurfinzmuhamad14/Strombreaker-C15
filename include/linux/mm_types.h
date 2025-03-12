@@ -336,6 +336,10 @@ struct vm_area_struct {
 	struct mempolicy *vm_policy;	/* NUMA policy for the VMA */
 #endif
 	struct vm_userfaultfd_ctx vm_userfaultfd_ctx;
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	seqcount_t vm_sequence;		/* Speculative page fault field */
+	atomic_t vm_ref_count;		/* see vma_get(), vma_put() */
+#endif
 
 	ANDROID_KABI_RESERVE(1);
 	ANDROID_KABI_RESERVE(2);
@@ -360,6 +364,9 @@ struct mm_struct {
 		struct vm_area_struct *mmap;		/* list of VMAs */
 		struct rb_root mm_rb;
 		u64 vmacache_seqnum;                   /* per-thread vmacache */
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+		rwlock_t mm_rb_lock;	/* Speculative page fault field */
+#endif
 #ifdef CONFIG_MMU
 		unsigned long (*get_unmapped_area) (struct file *filp,
 				unsigned long addr, unsigned long len,
@@ -508,6 +515,11 @@ struct mm_struct {
 #if IS_ENABLED(CONFIG_HMM)
 		/* HMM needs to track a few things per mm */
 		struct hmm *hmm;
+#endif
+#if defined(OPLUS_FEATURE_VIRTUAL_RESERVE_MEMORY) && defined(CONFIG_VIRTUAL_RESERVE_MEMORY)
+		unsigned long va_feature_rnd;
+		unsigned int zygoteheap_in_MB;
+		int va_feature;
 #endif
 	} __randomize_layout;
 

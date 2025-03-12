@@ -29,7 +29,12 @@
 #include <linux/mm_event.h>
 #include <linux/task_io_accounting.h>
 #include <linux/rseq.h>
-#include <linux/android_kabi.h>
+
+#ifdef OPLUS_FEATURE_HEALTHINFO
+#ifdef CONFIG_OPPO_JANK_INFO
+#include <linux/oppo_healthinfo/oppo_jank_monitor.h>
+#endif
+#endif /* OPLUS_FEATURE_HEALTHINFO */
 
 /* task_struct member predeclarations (sorted alphabetically): */
 struct audit_context;
@@ -48,6 +53,7 @@ struct pid_namespace;
 struct pipe_inode_info;
 struct rcu_node;
 struct reclaim_state;
+struct capture_control;
 struct robust_list_head;
 struct sched_attr;
 struct sched_param;
@@ -112,6 +118,27 @@ struct task_group;
 #define task_contributes_to_load(task)	((task->state & TASK_UNINTERRUPTIBLE) != 0 && \
 					 (task->flags & PF_FROZEN) == 0 && \
 					 (task->state & TASK_NOLOAD) == 0)
+
+enum task_boost_type {
+	TASK_BOOST_NONE = 0,
+	TASK_BOOST_ON_MID,
+	TASK_BOOST_ON_MAX,
+	TASK_BOOST_STRICT_MAX,
+	TASK_BOOST_END,
+};
+
+/*
+ * Enum for display driver to provide varying refresh rates
+ */
+enum fps {
+	FPS0 = 0,
+	FPS30 = 30,
+	FPS48 = 48,
+	FPS60 = 60,
+	FPS90 = 90,
+	FPS120 = 120,
+	FPS144 = 144,
+};
 
 #ifdef CONFIG_DEBUG_ATOMIC_SLEEP
 
@@ -205,8 +232,68 @@ struct task_group;
 
 #endif
 
+#ifdef OPLUS_FEATURE_UIFIRST
+extern int sysctl_uifirst_enabled;
+extern int sysctl_launcher_boost_enabled;
+extern int sysctl_slide_boost_enabled;
+extern int sysctl_boost_task_threshold;
+#ifdef CONFIG_CAMERA_OPT
+extern int sysctl_camera_opt_enabled;
+#endif
+#endif /* OPLUS_FEATURE_UIFIRST */
+
 /* Task command name length: */
 #define TASK_COMM_LEN			16
+
+enum task_event {
+	PUT_PREV_TASK   = 0,
+	PICK_NEXT_TASK  = 1,
+	TASK_WAKE       = 2,
+	TASK_MIGRATE    = 3,
+	TASK_UPDATE     = 4,
+	IRQ_UPDATE      = 5,
+};
+
+/* Note: this need to be in sync with migrate_type_names array */
+enum migrate_types {
+	GROUP_TO_RQ,
+	RQ_TO_GROUP,
+};
+
+#ifdef CONFIG_HOTPLUG_CPU
+extern int sched_isolate_count(const cpumask_t *mask, bool include_offline);
+extern int sched_isolate_cpu(int cpu);
+extern int sched_unisolate_cpu(int cpu);
+extern int sched_unisolate_cpu_unlocked(int cpu);
+#else
+static inline int sched_isolate_count(const cpumask_t *mask,
+				      bool include_offline)
+{
+	cpumask_t count_mask;
+
+	if (include_offline)
+		cpumask_andnot(&count_mask, mask, cpu_online_mask);
+	else
+		return 0;
+
+	return cpumask_weight(&count_mask);
+}
+
+static inline int sched_isolate_cpu(int cpu)
+{
+	return 0;
+}
+
+static inline int sched_unisolate_cpu(int cpu)
+{
+	return 0;
+}
+
+static inline int sched_unisolate_cpu_unlocked(int cpu)
+{
+	return 0;
+}
+#endif
 
 extern void scheduler_tick(void);
 
@@ -224,6 +311,7 @@ extern int __must_check io_schedule_prepare(void);
 extern void io_schedule_finish(int token);
 extern long io_schedule_timeout(long timeout);
 extern void io_schedule(void);
+extern int set_task_boost(int boost, u64 period);
 
 /**
  * struct prev_cputime - snapshot of system and user cputime
@@ -487,12 +575,107 @@ struct sched_entity {
 	 */
 	struct sched_avg		avg;
 #endif
-
-	ANDROID_KABI_RESERVE(1);
-	ANDROID_KABI_RESERVE(2);
-	ANDROID_KABI_RESERVE(3);
-	ANDROID_KABI_RESERVE(4);
 };
+
+struct sched_load {
+	unsigned long prev_load;
+	unsigned long new_task_load;
+	unsigned long predicted_load;
+};
+
+struct cpu_cycle_counter_cb {
+	u64 (*get_cpu_cycle_counter)(int cpu);
+};
+
+#define MAX_NUM_CGROUP_COLOC_ID	20
+
+DECLARE_PER_CPU_READ_MOSTLY(int, sched_load_boost);
+
+#ifdef CONFIG_SCHED_WALT
+extern void sched_exit(struct task_struct *p);
+extern int register_cpu_cycle_counter_cb(struct cpu_cycle_counter_cb *cb);
+extern void sched_set_io_is_busy(int val);
+extern int sched_set_group_id(struct task_struct *p, unsigned int group_id);
+extern unsigned int sched_get_group_id(struct task_struct *p);
+extern int sched_set_init_task_load(struct task_struct *p, int init_load_pct);
+extern u32 sched_get_init_task_load(struct task_struct *p);
+extern void sched_update_cpu_freq_min_max(const cpumask_t *cpus, u32 fmin,
+					  u32 fmax);
+extern int sched_set_boost(int enable);
+extern void free_task_load_ptrs(struct task_struct *p);
+extern void sched_set_refresh_rate(enum fps fps);
+
+#define RAVG_HIST_SIZE_MAX 5
+#define NUM_BUSY_BUCKETS 10
+
+/* ravg represents frequency scaled cpu-demand of tasks */
+struct ravg {
+	/*
+	 * 'mark_start' marks the beginning of an event (task waking up, task
+	 * starting to execute, task being preempted) within a window
+	 *
+	 * 'sum' represents how runnable a task has been within current
+	 * window. It incorporates both running time and wait time and is
+	 * frequency scaled.
+	 *
+	 * 'sum_history' keeps track of history of 'sum' seen over previous
+	 * RAVG_HIST_SIZE windows. Windows where task was entirely sleeping are
+	 * ignored.
+	 *
+	 * 'demand' represents maximum sum seen over previous
+	 * sysctl_sched_ravg_hist_size windows. 'demand' could drive frequency
+	 * demand for tasks.
+	 *
+	 * 'curr_window_cpu' represents task's contribution to cpu busy time on
+	 * various CPUs in the current window
+	 *
+	 * 'prev_window_cpu' represents task's contribution to cpu busy time on
+	 * various CPUs in the previous window
+	 *
+	 * 'curr_window' represents the sum of all entries in curr_window_cpu
+	 *
+	 * 'prev_window' represents the sum of all entries in prev_window_cpu
+	 *
+	 * 'pred_demand' represents task's current predicted cpu busy time
+	 *
+	 * 'busy_buckets' groups historical busy time into different buckets
+	 * used for prediction
+	 *
+	 * 'demand_scaled' represents task's demand scaled to 1024
+	 */
+	u64 mark_start;
+	u32 sum, demand;
+	u32 coloc_demand;
+	u32 sum_history[RAVG_HIST_SIZE_MAX];
+	u32 *curr_window_cpu, *prev_window_cpu;
+	u32 curr_window, prev_window;
+	u32 pred_demand;
+	u8 busy_buckets[NUM_BUSY_BUCKETS];
+	u16 demand_scaled;
+	u16 pred_demand_scaled;
+	u64 active_time;
+	u64 last_win_size;
+};
+#else
+static inline void sched_exit(struct task_struct *p) { }
+static inline int
+register_cpu_cycle_counter_cb(struct cpu_cycle_counter_cb *cb)
+{
+	return 0;
+}
+static inline void sched_set_io_is_busy(int val) {};
+
+static inline int sched_set_boost(int enable)
+{
+	return -EINVAL;
+}
+static inline void free_task_load_ptrs(struct task_struct *p) { }
+
+static inline void sched_update_cpu_freq_min_max(const cpumask_t *cpus,
+					u32 fmin, u32 fmax) { }
+
+static inline void sched_set_refresh_rate(enum fps fps) { }
+#endif /* CONFIG_SCHED_WALT */
 
 struct sched_rt_entity {
 	struct list_head		run_list;
@@ -510,11 +693,6 @@ struct sched_rt_entity {
 	/* rq "owned" by this entity/group: */
 	struct rt_rq			*my_q;
 #endif
-
-	ANDROID_KABI_RESERVE(1);
-	ANDROID_KABI_RESERVE(2);
-	ANDROID_KABI_RESERVE(3);
-	ANDROID_KABI_RESERVE(4);
 } __randomize_layout;
 
 struct sched_dl_entity {
@@ -644,6 +822,14 @@ struct wake_q_node {
 	struct wake_q_node *next;
 };
 
+#if defined(OPLUS_FEATURE_PROCESS_RECLAIM) && defined(CONFIG_PROCESS_RECLAIM_ENHANCE)
+/* Record process reclaim memory information */
+union reclaim_limit {
+	unsigned long stop_jiffies;
+	unsigned long stop_scan_addr;
+};
+#endif
+
 struct task_struct {
 #ifdef CONFIG_THREAD_INFO_IN_TASK
 	/*
@@ -698,15 +884,34 @@ struct task_struct {
 	const struct sched_class	*sched_class;
 	struct sched_entity		se;
 	struct sched_rt_entity		rt;
+	u64				 last_sleep_ts;
 
-	/* task boost vendor fields */
-	u64				last_sleep_ts;
 	int				boost;
 	u64				boost_period;
 	u64				boost_expires;
+#ifdef CONFIG_SCHED_WALT
+	struct ravg ravg;
+	/*
+	 * 'init_load_pct' represents the initial task load assigned to children
+	 * of this task
+	 */
+	u32 init_load_pct;
+	u64 last_wake_ts;
+	u64 last_enqueued_ts;
+	struct related_thread_group *grp;
+	struct list_head grp_list;
+	u64 cpu_cycles;
+	bool misfit;
+	u32 unfilter;
+	bool low_latency;
+	bool rtg_high_prio;
+#endif
 
 #ifdef CONFIG_CGROUP_SCHED
 	struct task_group		*sched_task_group;
+#endif
+#ifdef CONFIG_SCHED_TUNE
+	int				stune_idx;
 #endif
 	struct sched_dl_entity		dl;
 
@@ -930,8 +1135,10 @@ struct task_struct {
 	struct sysv_shm			sysvshm;
 #endif
 #ifdef CONFIG_DETECT_HUNG_TASK
+	/* hung task detection */
 	unsigned long			last_switch_count;
 	unsigned long			last_switch_time;
+	bool hang_detection_enabled;
 #endif
 	/* Filesystem information: */
 	struct fs_struct		*fs;
@@ -1038,6 +1245,9 @@ struct task_struct {
 
 	struct io_context		*io_context;
 
+#ifdef CONFIG_COMPACTION
+	struct capture_control		*capture_control;
+#endif
 	/* Ptrace state: */
 	unsigned long			ptrace_message;
 	siginfo_t			*last_siginfo;
@@ -1186,6 +1396,11 @@ struct task_struct {
 	int				latency_record_count;
 	struct latency_record		latency_record[LT_SAVECOUNT];
 #endif
+#if defined(OPLUS_FEATURE_MEMLEAK_DETECT) && defined(CONFIG_ION) && defined(CONFIG_DUMP_TASKS_MEM)
+	/* record ions info of task. */
+	struct list_head user_tasks;
+	atomic64_t ions;
+#endif
 	/*
 	 * Time slack values; these are used to round up poll() and
 	 * select() etc timeout values. These are in nanoseconds.
@@ -1263,7 +1478,10 @@ struct task_struct {
 #ifdef CONFIG_BLK_CGROUP
 	struct request_queue		*throttle_queue;
 #endif
-
+#if defined(OPLUS_FEATURE_PROCESS_RECLAIM) && defined(CONFIG_PROCESS_RECLAIM)
+	/* Record process reclaim infor */
+	union reclaim_limit reclaim;
+#endif
 #ifdef CONFIG_UPROBES
 	struct uprobe_task		*utask;
 #endif
@@ -1292,16 +1510,31 @@ struct task_struct {
 	/* Used by LSM modules for access restriction: */
 	void				*security;
 #endif
+#ifdef OPLUS_FEATURE_UIFIRST
+	int static_ux;
+	atomic64_t dynamic_ux;
+	struct list_head ux_entry;
+	int ux_depth;
+	u64 enqueue_time;
+	u64 dynamic_ux_start;
+#ifdef CONFIG_CAMERA_OPT
+	int camera_opt;
+#endif
+#endif /* OPLUS_FEATURE_UIFIRST */
+#ifdef OPLUS_FEATURE_HEALTHINFO
+#ifdef CONFIG_OPPO_JANK_INFO
+	int jank_trace;
+	struct oppo_jank_monitor_info oppo_jank_info;
+	unsigned in_mutex:1;
+	unsigned in_downread:1;
+	unsigned in_downwrite:1;
+	unsigned in_futex:1;
+	unsigned in_binder:1;
+	unsigned in_epoll:1;
+#endif
+#endif /* OPLUS_FEATURE_HEALTHINFO */
 	/* task is frozen/stopped (used by the cgroup freezer) */
 	ANDROID_KABI_USE(1, unsigned frozen:1);
-
-	ANDROID_KABI_RESERVE(2);
-	ANDROID_KABI_RESERVE(3);
-	ANDROID_KABI_RESERVE(4);
-	ANDROID_KABI_RESERVE(5);
-	ANDROID_KABI_RESERVE(6);
-	ANDROID_KABI_RESERVE(7);
-	ANDROID_KABI_RESERVE(8);
 
 	/*
 	 * New fields for task_struct should be added above here, so that
@@ -1309,6 +1542,9 @@ struct task_struct {
 	 */
 	randomized_struct_fields_end
 
+#ifdef CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT
+	struct fuse_package *fpack;
+#endif /* CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT */
 	/* CPU-specific state of this task: */
 	struct thread_struct		thread;
 
@@ -1319,6 +1555,14 @@ struct task_struct {
 	 * Do not put anything below here!
 	 */
 };
+
+#ifdef CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT
+struct fuse_package {
+	bool fuse_open_req;
+	struct file *filp;
+	char *iname;
+};
+#endif /* CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT */
 
 static inline struct pid *task_pid(struct task_struct *task)
 {
@@ -1503,9 +1747,16 @@ extern struct pid *cad_pid;
 #define PF_MEMSTALL		0x01000000	/* Stalled due to lack of memory */
 #define PF_NO_SETAFFINITY	0x04000000	/* Userland is not allowed to meddle with cpus_allowed */
 #define PF_MCE_EARLY		0x08000000      /* Early kill for mce process policy */
+#define PF_WAKE_UP_IDLE         0x10000000	/* TTWU on an idle CPU */
 #define PF_MUTEX_TESTER		0x20000000	/* Thread belongs to the rt mutex tester */
 #define PF_FREEZER_SKIP		0x40000000	/* Freezer should not count it as freezable */
 #define PF_SUSPEND_TASK		0x80000000      /* This thread called freeze_processes() and should not be frozen */
+#if defined(OPLUS_FEATURE_PROCESS_RECLAIM) && defined(CONFIG_PROCESS_RECLAIM)
+/* flag that current task is process reclaimer */
+#define PF_RECLAIM_SHRINK	0x02000000	/* Flag the task is memory compresser */
+
+#define current_is_reclaimer() (current->flags & PF_RECLAIM_SHRINK)
+#endif
 
 /*
  * Only the _current_ task can read/write to tsk->flags, but other
@@ -1603,6 +1854,7 @@ extern int task_can_attach(struct task_struct *p, const struct cpumask *cs_cpus_
 #ifdef CONFIG_SMP
 extern void do_set_cpus_allowed(struct task_struct *p, const struct cpumask *new_mask);
 extern int set_cpus_allowed_ptr(struct task_struct *p, const struct cpumask *new_mask);
+extern bool cpupri_check_rt(void);
 #else
 static inline void do_set_cpus_allowed(struct task_struct *p, const struct cpumask *new_mask)
 {
@@ -1612,6 +1864,10 @@ static inline int set_cpus_allowed_ptr(struct task_struct *p, const struct cpuma
 	if (!cpumask_test_cpu(0, new_mask))
 		return -EINVAL;
 	return 0;
+}
+static inline bool cpupri_check_rt(void)
+{
+	return false;
 }
 #endif
 
@@ -1713,12 +1969,17 @@ extern void kick_process(struct task_struct *tsk);
 #else
 static inline void kick_process(struct task_struct *tsk) { }
 #endif
-
+#ifdef CONFIG_CAMERA_OPT
+extern void set_camera_opt(struct task_struct *tsk);
+#endif
 extern void __set_task_comm(struct task_struct *tsk, const char *from, bool exec);
 
 static inline void set_task_comm(struct task_struct *tsk, const char *from)
 {
 	__set_task_comm(tsk, from, false);
+#ifdef CONFIG_CAMERA_OPT
+	set_camera_opt(tsk);
+#endif
 }
 
 extern char *__get_task_comm(char *to, size_t len, struct task_struct *tsk);
@@ -2010,5 +2271,33 @@ static inline void rseq_syscall(struct pt_regs *regs)
 }
 
 #endif
+
+static inline u32 sched_get_wake_up_idle(struct task_struct *p)
+{
+	u32 enabled = p->flags & PF_WAKE_UP_IDLE;
+
+	return !!enabled;
+}
+
+static inline int sched_set_wake_up_idle(struct task_struct *p,
+						int wake_up_idle)
+{
+	int enable = !!wake_up_idle;
+
+	if (enable)
+		p->flags |= PF_WAKE_UP_IDLE;
+	else
+		p->flags &= ~PF_WAKE_UP_IDLE;
+
+	return 0;
+}
+
+static inline void set_wake_up_idle(bool enabled)
+{
+	if (enabled)
+		current->flags |= PF_WAKE_UP_IDLE;
+	else
+		current->flags &= ~PF_WAKE_UP_IDLE;
+}
 
 #endif

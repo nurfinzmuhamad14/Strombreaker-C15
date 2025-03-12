@@ -29,6 +29,9 @@
 #endif
 #define MAX_ORDER_NR_PAGES (1 << (MAX_ORDER - 1))
 
+#if defined(CONFIG_PHYSICAL_ANTI_FRAGMENTATION)
+#define FREE_AREA_COUNTS 4
+#endif
 /*
  * PAGE_ALLOC_COSTLY_ORDER is the order at which allocations are deemed
  * costly to service.  That is between allocation orders which should
@@ -36,6 +39,8 @@
  * will not.
  */
 #define PAGE_ALLOC_COSTLY_ORDER 3
+
+#define MAX_KSWAPD_THREADS 16
 
 enum migratetype {
 	MIGRATE_UNMOVABLE,
@@ -154,6 +159,9 @@ enum zone_stat_item {
 	NR_ZSPAGES,		/* allocated in zsmalloc */
 #endif
 	NR_FREE_CMA_PAGES,
+#ifdef OPLUS_FEATURE_HEALTHINFO
+        NR_IONCACHE_PAGES,
+#endif /* OPLUS_FEATURE_HEALTHINFO */
 	NR_VM_ZONE_STAT_ITEMS };
 
 enum node_stat_item {
@@ -278,9 +286,10 @@ enum zone_watermarks {
 	NR_WMARK
 };
 
-#define min_wmark_pages(z) (z->watermark[WMARK_MIN])
-#define low_wmark_pages(z) (z->watermark[WMARK_LOW])
-#define high_wmark_pages(z) (z->watermark[WMARK_HIGH])
+#define min_wmark_pages(z) (z->_watermark[WMARK_MIN] + z->watermark_boost / 2)
+#define low_wmark_pages(z) (z->_watermark[WMARK_LOW] + z->watermark_boost / 2)
+#define high_wmark_pages(z) (z->_watermark[WMARK_HIGH] + z->watermark_boost)
+#define wmark_pages(z, i) (z->_watermark[i] + (((i) == WMARK_HIGH) ? (z->watermark_boost) : (z->watermark_boost / 2)))
 
 struct per_cpu_pages {
 	int count;		/* number of pages in the list */
@@ -367,11 +376,20 @@ enum zone_type {
 
 #ifndef __GENERATING_BOUNDS_H
 
+#if defined(CONFIG_PHYSICAL_ANTI_FRAGMENTATION)
+struct page_label {
+    unsigned long label;
+    unsigned long segment;
+};
+#endif
+
+
 struct zone {
 	/* Read-mostly fields */
 
 	/* zone watermarks, access with *_wmark_pages(zone) macros */
-	unsigned long watermark[NR_WMARK];
+	unsigned long _watermark[NR_WMARK];
+	unsigned long watermark_boost;
 
 	unsigned long nr_reserved_highatomic;
 
@@ -451,7 +469,9 @@ struct zone {
 	unsigned long		managed_pages;
 	unsigned long		spanned_pages;
 	unsigned long		present_pages;
-
+#if defined(CONFIG_PHYSICAL_ANTI_FRAGMENTATION)
+    struct page_label zone_label[FREE_AREA_COUNTS];
+#endif
 	const char		*name;
 
 #ifdef CONFIG_MEMORY_ISOLATION
@@ -474,7 +494,11 @@ struct zone {
 	ZONE_PADDING(_pad1_)
 
 	/* free areas of different sizes */
+#if defined(CONFIG_PHYSICAL_ANTI_FRAGMENTATION)
+	struct free_area	free_area[FREE_AREA_COUNTS][MAX_ORDER];
+#else
 	struct free_area	free_area[MAX_ORDER];
+#endif
 
 	/* zone flags, see below */
 	unsigned long		flags;
@@ -497,6 +521,8 @@ struct zone {
 	unsigned long		compact_cached_free_pfn;
 	/* pfn where async and sync compaction migration scanner should start */
 	unsigned long		compact_cached_migrate_pfn[2];
+	unsigned long		compact_init_migrate_pfn;
+	unsigned long		compact_init_free_pfn;
 #endif
 
 #ifdef CONFIG_COMPACTION
@@ -540,6 +566,12 @@ enum pgdat_flags {
 					 * many pages under writeback
 					 */
 	PGDAT_RECLAIM_LOCKED,		/* prevents concurrent reclaim */
+};
+
+enum zone_flags {
+	ZONE_BOOSTED_WATERMARK,		/* zone recently boosted watermarks.
+					 * Cleared when kswapd is woken.
+					 */
 };
 
 static inline unsigned long zone_end_pfn(const struct zone *zone)
@@ -676,8 +708,10 @@ typedef struct pglist_data {
 	int node_id;
 	wait_queue_head_t kswapd_wait;
 	wait_queue_head_t pfmemalloc_wait;
-	struct task_struct *kswapd;	/* Protected by
-					   mem_hotplug_begin/end() */
+	/*
+	 * Protected by mem_hotplug_begin/end()
+	 */
+	struct task_struct *kswapd[MAX_KSWAPD_THREADS];
 	int kswapd_order;
 	enum zone_type kswapd_classzone_idx;
 
@@ -909,7 +943,11 @@ static inline int is_highmem(struct zone *zone)
 
 /* These two functions are used to setup the per zone pages min values */
 struct ctl_table;
+int kswapd_threads_sysctl_handler(struct ctl_table *, int,
+					void __user *, size_t *, loff_t *);
 int min_free_kbytes_sysctl_handler(struct ctl_table *, int,
+					void __user *, size_t *, loff_t *);
+int watermark_boost_factor_sysctl_handler(struct ctl_table *, int,
 					void __user *, size_t *, loff_t *);
 int watermark_scale_factor_sysctl_handler(struct ctl_table *, int,
 					void __user *, size_t *, loff_t *);
