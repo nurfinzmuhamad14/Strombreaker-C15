@@ -1264,8 +1264,6 @@ void f2fs_wait_on_all_pages(struct f2fs_sb_info *sbi, int type)
 	DEFINE_WAIT(wait);
 
 	for (;;) {
-		prepare_to_wait(&sbi->cp_wait, &wait, TASK_UNINTERRUPTIBLE);
-
 		if (!get_pages(sbi, type))
 			break;
 
@@ -1275,6 +1273,10 @@ void f2fs_wait_on_all_pages(struct f2fs_sb_info *sbi, int type)
 		if (type == F2FS_DIRTY_META)
 			f2fs_sync_meta_pages(sbi, META, LONG_MAX,
 							FS_CP_META_IO);
+		else if (type == F2FS_WB_CP_DATA)
+			f2fs_submit_merged_write(sbi, DATA);
+
+		prepare_to_wait(&sbi->cp_wait, &wait, TASK_UNINTERRUPTIBLE);
 		io_schedule_timeout(DEFAULT_IO_TIMEOUT);
 	}
 	finish_wait(&sbi->cp_wait, &wait);
@@ -1383,7 +1385,12 @@ static void commit_checkpoint(struct f2fs_sb_info *sbi,
 	f2fs_submit_merged_write(sbi, META_FLUSH);
 }
 
+#ifdef CONFIG_F2FS_BD_STAT
+static int do_checkpoint(struct f2fs_sb_info *sbi,
+	struct cp_control *cpc, u64 *cp_flush_meta_time)
+#else
 static int do_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
+#endif
 {
 	struct f2fs_checkpoint *ckpt = F2FS_CKPT(sbi);
 	struct f2fs_nm_info *nm_i = NM_I(sbi);
@@ -1397,10 +1404,20 @@ static int do_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 	struct curseg_info *seg_i = CURSEG_I(sbi, CURSEG_HOT_NODE);
 	u64 kbytes_written;
 	int err;
-
+#ifdef CONFIG_F2FS_BD_STAT
+	u64 cp_flush_meta_begin;
+	cp_flush_meta_begin = local_clock();
+#endif
 	/* Flush all the NAT/SIT pages */
 	f2fs_sync_meta_pages(sbi, META, LONG_MAX, FS_CP_META_IO);
+	if (get_pages(sbi, F2FS_DIRTY_META) && !f2fs_cp_error(sbi)) {
+		WARN_ON(1);
+		set_sbi_flag(sbi, SBI_NEED_FSCK);
+	}
 
+#ifdef CONFIG_F2FS_BD_STAT
+	*cp_flush_meta_time += local_clock() - cp_flush_meta_begin;
+#endif
 	/* start to update checkpoint, cp ver is already updated previously */
 	ckpt->elapsed_time = cpu_to_le64(get_mtime(sbi, true));
 	ckpt->free_segment_count = cpu_to_le32(free_segments(sbi));
@@ -1504,6 +1521,10 @@ static int do_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 
 	/* Here, we have one bio having CP pack except cp pack 2 page */
 	f2fs_sync_meta_pages(sbi, META, LONG_MAX, FS_CP_META_IO);
+	if (get_pages(sbi, F2FS_DIRTY_META) && !f2fs_cp_error(sbi)) {
+		WARN_ON(1);
+		set_sbi_flag(sbi, SBI_NEED_FSCK);
+	}
 	/* Wait for all dirty meta pages to be submitted for IO */
 	f2fs_wait_on_all_pages(sbi, F2FS_DIRTY_META);
 
@@ -1559,7 +1580,10 @@ int f2fs_write_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 	struct f2fs_checkpoint *ckpt = F2FS_CKPT(sbi);
 	unsigned long long ckpt_ver;
 	int err = 0;
-
+#ifdef CONFIG_F2FS_BD_STAT
+	u64 cp_begin = 0, cp_end, cp_submit_end = 0, discard_begin, discard_end;
+	u64 cp_flush_meta_time, cp_flush_meta_begin;
+#endif
 	if (f2fs_readonly(sbi->sb) || f2fs_hw_is_readonly(sbi))
 		return -EROFS;
 
@@ -1581,7 +1605,9 @@ int f2fs_write_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 	}
 
 	trace_f2fs_write_checkpoint(sbi->sb, cpc->reason, "start block_ops");
-
+#ifdef CONFIG_F2FS_BD_STAT
+	cp_begin = local_clock();
+#endif
 	err = block_operations(sbi);
 	if (err)
 		goto out;
@@ -1589,7 +1615,9 @@ int f2fs_write_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 	trace_f2fs_write_checkpoint(sbi->sb, cpc->reason, "finish block_ops");
 
 	f2fs_flush_merged_writes(sbi);
-
+#ifdef CONFIG_F2FS_BD_STAT
+	cp_submit_end = local_clock();
+#endif
 	/* this is the case of multiple fstrims without any changes */
 	if (cpc->reason & CP_DISCARD) {
 		if (!f2fs_exist_trim_candidates(sbi, cpc)) {
@@ -1600,8 +1628,22 @@ int f2fs_write_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 		if (NM_I(sbi)->dirty_nat_cnt == 0 &&
 				SIT_I(sbi)->dirty_sentries == 0 &&
 				prefree_segments(sbi) == 0) {
+#ifdef CONFIG_F2FS_BD_STAT
+			cp_flush_meta_begin = local_clock();
+#endif
 			f2fs_flush_sit_entries(sbi, cpc);
+#ifdef CONFIG_F2FS_BD_STAT
+			discard_begin = local_clock();
+			cp_flush_meta_time = discard_begin - cp_flush_meta_begin;
+#endif
 			f2fs_clear_prefree_segments(sbi, cpc);
+#ifdef CONFIG_F2FS_BD_STAT
+			discard_end = local_clock();
+			bd_lock(sbi);
+			bd_max_val(sbi, max_cp_discard_time,
+				   discard_end - discard_begin);
+			bd_unlock(sbi);
+#endif
 			unblock_operations(sbi);
 			goto out;
 		}
@@ -1616,18 +1658,46 @@ int f2fs_write_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 	ckpt->checkpoint_ver = cpu_to_le64(++ckpt_ver);
 
 	/* write cached NAT/SIT entries to NAT/SIT area */
+#ifdef CONFIG_F2FS_BD_STAT
+	cp_flush_meta_begin = local_clock();
+#endif
 	err = f2fs_flush_nat_entries(sbi, cpc);
 	if (err)
 		goto stop;
 
 	f2fs_flush_sit_entries(sbi, cpc);
-
+#ifdef CONFIG_OPLUS_FEATURE_OF2FS
+	/* flush summary info in virtual log header */
+	store_virtual_curseg_summary(sbi);
+	restore_virtual_curseg_status(sbi, true);
+#endif
+#ifdef CONFIG_F2FS_BD_STAT
+	cp_flush_meta_time = local_clock() - cp_flush_meta_begin;
+ 	/* unlock all the fs_lock[] in do_checkpoint() */
+	err = do_checkpoint(sbi, cpc, &cp_flush_meta_time);
+	if (err)
+		f2fs_release_discard_addrs(sbi);
+	else {
+		discard_begin = local_clock();
+		f2fs_clear_prefree_segments(sbi, cpc);
+		discard_end = local_clock();
+		bd_lock(sbi);
+		bd_max_val(sbi, max_cp_discard_time,
+			   discard_end - discard_begin);
+		bd_unlock(sbi);
+	}
+#else
+	/* unlock all the fs_lock[] in do_checkpoint() */
 	err = do_checkpoint(sbi, cpc);
 	if (err)
 		f2fs_release_discard_addrs(sbi);
 	else
 		f2fs_clear_prefree_segments(sbi, cpc);
+#endif
 stop:
+#ifdef CONFIG_OPLUS_FEATURE_OF2FS
+	restore_virtual_curseg_status(sbi, false);
+#endif
 	unblock_operations(sbi);
 	stat_inc_cp_count(sbi->stat_info);
 
@@ -1640,6 +1710,18 @@ stop:
 out:
 	if (cpc->reason != CP_RESIZE)
 		mutex_unlock(&sbi->cp_mutex);
+#ifdef CONFIG_F2FS_BD_STAT
+	if (!err && cp_begin) {
+		cp_end = local_clock();
+		bd_lock(sbi);
+		bd_inc_val(sbi, cp_success_count, 1);
+		bd_max_val(sbi, max_cp_submit_time, cp_submit_end - cp_begin);
+		bd_inc_val(sbi, cp_time, cp_end - cp_begin);
+		bd_max_val(sbi, max_cp_time, cp_end - cp_begin);
+		bd_max_val(sbi, max_cp_flush_meta_time, cp_flush_meta_time);
+		bd_unlock(sbi);
+	}
+#endif
 	return err;
 }
 

@@ -1503,6 +1503,7 @@ static int is_dx_internal_node(struct inode *dir, ext4_lblk_t block,
 
 /*
  *	__ext4_find_entry()
+ *	__ext4_find_entry()
  *
  * finds an entry in the specified directory with the wanted name. It
  * returns the cache buffer in which the entry was found, and the entry
@@ -1766,6 +1767,7 @@ static struct dentry *ext4_lookup(struct inode *dir, struct dentry *dentry, unsi
 	if (dentry->d_name.len > EXT4_NAME_LEN)
 		return ERR_PTR(-ENAMETOOLONG);
 
+	bh = ext4_lookup_entry(dir, dentry, &de);
 	bh = ext4_lookup_entry(dir, dentry, &de);
 	if (IS_ERR(bh))
 		return (struct dentry *) bh;
