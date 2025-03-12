@@ -102,7 +102,9 @@ static void msg_submit(struct mbox_chan *chan)
 	do {
 		err = __msg_submit(chan);
 	} while (err == -EAGAIN);
-
+	if (!err && (chan->txdone_method & TXDONE_BY_POLL))
+		/* kick start the timer immediately to avoid delays */
+		hrtimer_start(&chan->mbox->poll_hrt, 0, HRTIMER_MODE_REL);
 	/* kick start the timer immediately to avoid delays */
 	if (!err && (chan->txdone_method & TXDONE_BY_POLL)) {
 		/* but only if not already active */
@@ -146,6 +148,7 @@ static enum hrtimer_restart txdone_hrtimer(struct hrtimer *hrtimer)
 		struct mbox_chan *chan = &mbox->chans[i];
 
 		if (chan->active_req && chan->cl) {
+			resched = true;
 			resched = true;
 			txdone = chan->mbox->ops->last_tx_done(chan);
 			if (txdone)

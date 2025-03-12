@@ -57,6 +57,8 @@ source "drivers/char/Kconfig"
 
 source "drivers/i2c/Kconfig"
 
+source "drivers/i3c/Kconfig"
+
 source "drivers/spi/Kconfig"
 
 source "drivers/spmi/Kconfig"
@@ -101,7 +103,8 @@ source "drivers/usb/Kconfig"
 
 source "drivers/uwb/Kconfig"
 
-source "drivers/mmc/Kconfig"
+source "drivers/ommc/Kconfig"
+#source "drivers/mmc/Kconfig"
 
 source "drivers/memstick/Kconfig"
 
@@ -136,6 +139,8 @@ source "drivers/virtio/Kconfig"
 source "drivers/hv/Kconfig"
 
 source "drivers/xen/Kconfig"
+
+source "drivers/vservices/Kconfig"
 
 source "drivers/staging/Kconfig"
 
@@ -221,5 +226,16 @@ source "drivers/siox/Kconfig"
 
 source "drivers/slimbus/Kconfig"
 
+source "drivers/esoc/Kconfig"
+
+source "drivers/sensors/Kconfig"
+
+source "drivers/gpu/msm/Kconfig"
+
 source "drivers/energy_model/Kconfig"
+
+##ifdef OPLUS_FEATURE_BRINGUP
+source "drivers/nfc/pn553-i2c/Kconfig"
+##endif /* OPLUS_FEATURE_NFC_BRINGUP */
+
 endmenu
