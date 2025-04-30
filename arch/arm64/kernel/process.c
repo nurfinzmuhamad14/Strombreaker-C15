@@ -81,7 +81,7 @@ EXPORT_SYMBOL_GPL(arm_pm_restart);
 
 #else
 
-#include <soc/oplus/system/qcom_minidump_enhance.h>
+#include "soc/oplus/system/qcom_minidump_enhance.h"
 
 /*
  * Function pointers to optional machine specific functions
